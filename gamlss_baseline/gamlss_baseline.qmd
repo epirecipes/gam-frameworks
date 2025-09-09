@@ -1,0 +1,164 @@
+---
+title: "gamlss baseline model"
+author: "Simon Frost"
+format: gfm
+---
+
+## Libraries
+
+```{r}
+library(gamlss)
+library(gamlss.dist)
+library(gamlss.add)
+library(gamlss.spatial)
+library(ggplot2)
+```
+
+```{r}
+source("../utils/gamlss_coverage.R")
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+```
+
+## Helper functions
+
+```{r}
+read_inla_to_mgcv <- function(file) {
+  # Read all lines
+  lines <- readLines(file)
+  
+  # First line is number of regions
+  n <- as.integer(lines[1])
+  
+  # Initialize empty list
+  nb_list <- vector("list", n)
+  
+  # Loop over each region
+  for (i in 1:n) {
+    parts <- strsplit(lines[i + 1], "\\s+")[[1]]
+    parts <- parts[parts != ""]  # remove empties
+    
+    # Format: region_id, num_neighbors, neighbors...
+    region_id <- as.integer(parts[1])
+    #nbs <- as.integer(parts[-c(1, 2)])
+    nbs <- parts[-c(1,2)]
+    nb_list[[region_id]] <- nbs
+  }
+  
+  nb_list
+}
+```
+
+```{r}
+subset_nb <- function(nb_list, keep) {
+  # ensure 'keep' is integer indices
+  keep_int <- as.integer(keep)
+  keep_char <- as.character(keep)
+  # subset to regions in keep
+  nb_sub <- nb_list[keep_int]
+  
+  # drop neighbors not in keep
+  nb_sub <- lapply(nb_sub, function(nbs) nbs[nbs %in% keep_char])
+  
+  # keep original indices as names
+  names(nb_sub) <- keep
+  
+  nb_sub
+}
+```
+
+## Load data and process
+
+```{r}
+df <- read.table("../data/lassa_states_endemic.tsv", header=TRUE, row.names=NULL)
+# Exclude missing (forecast) datapoints
+df <- df[!is.na(df$y),]
+# Enforce factors
+df$region <- as.factor(df$region)
+df$region2 <- as.factor(df$region2)
+df$polyid <- as.factor(df$polyid)
+df$polyid2 <- as.factor(df$polyid2)
+# Load neighbour file
+nb_loc <- "../data/states_nbmatrix"
+nb <- read_inla_to_mgcv(nb_loc)
+nb2 <- subset_nb(nb, levels(df$polyid2))
+```
+
+```{r}
+vars <- c("y","logpop","polyid","polyid2","region2","year","epiWeek","spi","precip")
+df2 <- df[,vars]
+```
+
+## Fit model
+
+Define formula, using single `spi` and `precip` variables.
+
+```{r}
+form_ga <- formula(y ~ 1 +
+                    offset(logpop) +
+                    # Spatial effect – using a Markov random field smoother:
+                    ga(~s(polyid, bs = "mrf", xt = list(nb = nb2))) +
+                    # RW1 on year with one smooth per level of polyid2:
+                    ga(~s(year, bs = "ps", m = 1, by = polyid2)) +
+                    # RW2 on epiWeek, cyclic, with one smooth per level of region2:
+                    ga(~s(epiWeek, bs = "cc", m = 2, by = region2)) +
+                    # RW2 on spi:
+                    ga(~s(spi, bs = "ps", m = 2)) +
+                    # RW2 on precip:
+                    ga(~s(precip, bs = "ps", m = 2)))
+```
+
+```{r}
+form_gamlss <- y ~ 1 +
+  offset(logpop) +
+  # Spatial MRF on areal IDs (use neighbour list or precision/polys)
+  gmrf(polyid, neighbour = nb2, method = "Q") +
+  # RW1-like smooth on year, one curve per level of polyid2
+  pb(year, by = polyid2, control = pb.control(order = 1)) +
+  # Cyclic RW2-like smooth on epiWeek, one curve per level of region2
+  pbc(epiWeek, by = region2, control = pbc.control(order = 2)) +
+  # RW2-like smooths for covariates
+  pb(spi,    control = pb.control(order = 2)) +
+  pb(precip, control = pb.control(order = 2))
+```
+
+```{r}
+fit <- gamlss(form_ga,
+              family = NBI(),
+              data = df2,
+              control=gamlss.control(n.cyc=100))
+```
+
+## Model summary
+
+```{r}
+summary(fit)
+```
+
+```{r}
+AIC(fit)
+```
+
+## Model diagnostics
+
+```{r}
+plot(fit)
+```
+
+```{r}
+coverage <- gamlss_predictive_coverage(
+    fit,
+    df2$y,
+    level = 0.95,
+    method = "parametric",
+    nsim = 4000,
+    use_shortest = TRUE,
+    data_fit = df2
+) 
+```
+
+```{r}
+coverage$coverage
+```
