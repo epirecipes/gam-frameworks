@@ -1,0 +1,154 @@
+---
+title: "mgcv DLNM"
+author: "Simon Frost"
+format: gfm
+---
+
+## Libraries
+
+```{r}
+library(mgcv)
+library(gratia)
+library(ggplot2)
+```
+
+```{r}
+source("../utils/mgcv_coverage.R")
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+```
+
+## Helper functions
+
+```{r}
+read_inla_to_mgcv <- function(file) {
+  # Read all lines
+  lines <- readLines(file)
+  
+  # First line is number of regions
+  n <- as.integer(lines[1])
+  
+  # Initialize empty list
+  nb_list <- vector("list", n)
+  
+  # Loop over each region
+  for (i in 1:n) {
+    parts <- strsplit(lines[i + 1], "\\s+")[[1]]
+    parts <- parts[parts != ""]  # remove empties
+    
+    # Format: region_id, num_neighbors, neighbors...
+    region_id <- as.integer(parts[1])
+    #nbs <- as.integer(parts[-c(1, 2)])
+    nbs <- parts[-c(1,2)]
+    nb_list[[region_id]] <- nbs
+  }
+  
+  nb_list
+}
+```
+
+```{r}
+subset_nb <- function(nb_list, keep) {
+  # ensure 'keep' is integer indices
+  keep_int <- as.integer(keep)
+  keep_char <- as.character(keep)
+  # subset to regions in keep
+  nb_sub <- nb_list[keep_int]
+  
+  # drop neighbors not in keep
+  nb_sub <- lapply(nb_sub, function(nbs) nbs[nbs %in% keep_char])
+  
+  # keep original indices as names
+  names(nb_sub) <- keep
+  
+  nb_sub
+}
+```
+
+## Load data and process
+
+```{r}
+df <- read.table("../data/lassa_states_endemic.tsv", header=TRUE, row.names=NULL)
+# Exclude missing (forecast) datapoints
+df <- df[!is.na(df$y),]
+# Enforce factors
+df$region <- as.factor(df$region)
+df$region2 <- as.factor(df$region2)
+df$polyid2 <- as.factor(df$polyid2)
+# Load neighbour file
+nb_loc <- "../data/states_nbmatrix"
+nb <- read_inla_to_mgcv(nb_loc)
+nb2 <- subset_nb(nb, levels(df$polyid2))
+```
+
+Create matrices for lags.
+
+```{r}
+max_lag <- 180
+lags <- seq(0,max_lag,by=30)
+
+PRECIP <- as.matrix(df[,paste0("precip_",lags)]) 
+PRECIPLAG <- matrix(lags,nrow(PRECIP),length(lags),byrow=TRUE)
+
+SPI6 <- as.matrix(df[,paste0("spi1_",lags)]) 
+SPI6LAG <- matrix(lags,nrow(SPI6),length(lags),byrow=TRUE)
+```
+
+## Fit model
+
+Define formula, using single `spi` and `precip` variables.
+
+```{r}
+form <- formula(y ~ 1 +
+                      offset(logpop) +
+                      # Spatial effect – using a Markov random field smoother:
+                      s(polyid2, bs = "mrf", xt = list(nb = nb2)) +
+                      # RW1 on year with one smooth per level of polyid2:
+                      s(year, bs = "ps", m = 1, by = polyid2) +
+                      # RW2 on epiWeek, cyclic, with one smooth per level of region2:
+                      s(epiWeek, bs = "cc", m = 2, by = region2) +
+                      # Lag on SPI6 via te:
+                      te(SPI6,SPI6LAG,k=c(10,6),bs=c("ps","ps")) +
+                      # Lag on precipitation via te:
+                      te(PRECIP,PRECIPLAG,k=c(10,6),bs=c("ps","ps")))
+```
+
+
+```{r}
+fit <- gam(form, data=df, family=nb())
+```
+
+## Model summary
+
+```{r}
+summary(fit)
+```
+
+```{r}
+AIC(fit)
+```
+
+## Model diagnostics
+
+```{r}
+appraise(fit)
+```
+
+```{r}
+coverage <- gam_predictive_coverage(
+    fit,
+    level = 0.95,
+    method = "parametric",
+    nsim = 4000,
+    use_shortest = TRUE,
+    # parametric options:
+    parametric_engine = "simulate",
+    unconditional = TRUE   # include smoothing-parameter uncertainty (simulate + vcov)
+) 
+```
+
+```{r}
+coverage$coverage
+```
