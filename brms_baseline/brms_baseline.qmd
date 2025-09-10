@@ -1,0 +1,166 @@
+---
+title: "brms baseline model"
+author: "Simon Frost"
+format: gfm
+---
+
+## Libraries
+
+```{r}
+library(brms)
+library(ggplot2)
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+```
+
+## Helper functions
+
+```{r}
+read_inla_to_mgcv <- function(file) {
+  # Read all lines
+  lines <- readLines(file)
+  
+  # First line is number of regions
+  n <- as.integer(lines[1])
+  
+  # Initialize empty list
+  nb_list <- vector("list", n)
+  
+  # Loop over each region
+  for (i in 1:n) {
+    parts <- strsplit(lines[i + 1], "\\s+")[[1]]
+    parts <- parts[parts != ""]  # remove empties
+    
+    # Format: region_id, num_neighbors, neighbors...
+    region_id <- as.integer(parts[1])
+    #nbs <- as.integer(parts[-c(1, 2)])
+    nbs <- parts[-c(1,2)]
+    nb_list[[region_id]] <- nbs
+  }
+  
+  nb_list
+}
+```
+
+```{r}
+subset_nb <- function(nb_list, keep) {
+  # ensure 'keep' is integer indices
+  keep_int <- as.integer(keep)
+  keep_char <- as.character(keep)
+  # subset to regions in keep
+  nb_sub <- nb_list[keep_int]
+  
+  # drop neighbors not in keep
+  nb_sub <- lapply(nb_sub, function(nbs) nbs[nbs %in% keep_char])
+  
+  # keep original indices as names
+  names(nb_sub) <- keep
+  
+  nb_sub
+}
+```
+
+## Load data and process
+
+```{r}
+df <- read.table("../data/lassa_states_endemic.tsv", header=TRUE, row.names=NULL)
+# Exclude missing (forecast) datapoints
+df <- df[!is.na(df$y),]
+# Enforce factors
+df$region <- as.factor(df$region)
+df$region2 <- as.factor(df$region2)
+df$polyid2 <- as.factor(df$polyid2)
+# Load neighbour file
+nb_loc <- "../data/states_nbmatrix"
+nb <- read_inla_to_mgcv(nb_loc)
+nb2 <- subset_nb(nb, levels(df$polyid2))
+```
+
+```{r}
+# 1) Collect all area labels that appear either as a node or neighbor
+L <- nb2
+areas <- sort(unique(c(names(L), unlist(L, use.names = FALSE))))
+n <- length(areas)
+
+# 2) Map from label -> row/col index
+lab2idx <- setNames(seq_len(n), areas)
+
+# 3) Build a 0/1 adjacency (directed so far)
+M <- matrix(0L, n, n, dimnames = list(areas, areas))
+for (i_name in names(L)) {
+  if (length(L[[i_name]]) == 0L) next
+  i <- lab2idx[[i_name]]
+  js <- lab2idx[L[[i_name]]]
+  js <- js[!is.na(js)]             # just in case
+  if (length(js)) M[i, js] <- 1L
+}
+
+# 4) Make it undirected/symmetric and remove self-loops
+M <- 1L * ((M + t(M)) > 0)
+diag(M) <- 0L
+
+# (Optional) If your modeling factor is df$polyid, align the order:
+if (is.factor(df$polyid)) {
+  want <- levels(df$polyid)
+  stopifnot(all(want %in% rownames(M)))
+  M <- M[want, want, drop = FALSE]
+}
+```
+
+## Fit model
+
+Define formula, using single `spi` and `precip` variables.
+
+```{r}
+form <- y ~ 1 +
+    offset(logpop) +
+    # Spatial ICAR/CAR effect (replacement for mgcv s(polyid, bs="mrf", xt=list(nb=...))):
+    car(M = M, gr = polyid, type="icar") +
+    # RW1 P-spline on year, one curve per polyid2:
+    s(year, bs = "ps", m = 1, by = polyid2) +
+    # cyclic spline on epiWeek (≈ RW2 over a cycle), per region2:
+    s(epiWeek, bs = "cc", m = 2, by = region2) +
+    # P-spline (RW2-like) covariates:
+    s(spi,     bs = "ps", k = 12) +
+    s(precip,  bs = "ps", k = 12)
+```
+
+
+
+```{r}
+fit <- brm(
+  formula = bf(form),
+  data    = df,
+  data2 = list(M=M),
+  family  = negbinomial(link = "log"),  # ≈ mgcv::nb()
+  # cyclic splines need the period endpoints via the `knots` argument:
+  knots   = list(epiWeek = c(min(df$epiWeek), max(df$epiWeek))),
+  cores   = 4, chains = 4, iter = 3000, backend = "cmdstanr"
+)
+```
+
+## Model summary
+
+```{r}
+summary(fit)
+```
+
+## Model diagnostics
+
+```{r}
+plot(fit)
+```
+
+```{r}
+plot(conditional_effects(fit), points = TRUE)
+```
+
+```{r}
+pp_check(fit)
+```
+
+```{r}
+loo(fit)
+```
