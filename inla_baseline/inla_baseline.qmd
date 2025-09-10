@@ -24,6 +24,11 @@ df <- df[!is.na(df$y),]
 nb_loc <- "../data/states_nbmatrix"
 ```
 
+```{r}
+vars <- c("y","logpop","polyid","polyid2","region2","year","epiWeek","spi","precip")
+df2 <- df[,vars]
+```
+
 ## Fit model
 
 Priors.
@@ -69,7 +74,7 @@ form <- formula(y ~ 1 +
 ```{r}
 fit <- inla(form,
             verbose = TRUE,
-            data = df,
+            data = df2,
             family = "nbinomial",
             control.fixed = control.fixed1, # prior precision for (scaled) fixed effects
             control.predictor=list(compute=TRUE,
