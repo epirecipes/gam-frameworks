@@ -25,7 +25,7 @@ nb_loc <- "../data/states_nbmatrix"
 ```
 
 ```{r}
-vars <- c("y","logpop","polyid","polyid2","region2","year","epiWeek","spi","precip")
+vars <- c("y","logpop","polyid","polyid2","region", "region2","year","epiWeek","spi","precip")
 df2 <- df[,vars]
 ```
 
@@ -62,18 +62,18 @@ hyper3.rw = list(prec = list(prior='pc.prec', param=c(1, 0.01))) # weakest; sd c
 Define formula, using single `spi` and `precip` variables.
 
 ```{r}
-form <- formula(y ~ 1 +
-                    offset(logpop) + 
-                    f(polyid, model="bym2", graph=nb_loc, scale.model=TRUE, constr=TRUE, adjust.for.con.comp=TRUE, hyper=hyper.bym2) +
-                    f(year, model="rw1", replicate=polyid2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
-                    f(epiWeek, model="rw2", cyclic=TRUE, replicate=region, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
-                    f(spi, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
-                    f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw))
+form = formula(y ~ 1 +
+                 offset(logpop) + 
+                 f(polyid, model="bym2", graph=nb_loc, scale.model=TRUE, constr=TRUE, adjust.for.con.comp=TRUE, hyper=hyper.bym2) +
+                 f(year, model="rw1", replicate=polyid2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
+                 f(epiWeek, model="rw2", cyclic=TRUE, replicate=region2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
+                 f(spi, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
+                 f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw))
 ```
 
 ```{r}
 fit <- inla(form,
-            verbose = TRUE,
+            verbose = FALSE,
             data = df2,
             family = "nbinomial",
             control.fixed = control.fixed1, # prior precision for (scaled) fixed effects
@@ -87,4 +87,10 @@ fit <- inla(form,
             control.inla = list(strategy='adaptive', # adaptive gaussian
                                 cmin=0), # fixing Q factorisation issue https://groups.google.com/g/r-inla-discussion-group/c/hDboQsJ1Mls)
             inla.mode = "experimental")
+```
+
+## Model summary
+
+```{r}
+summary(fit)
 ```

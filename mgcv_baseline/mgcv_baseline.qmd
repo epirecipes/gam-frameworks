@@ -79,8 +79,8 @@ df$region2 <- as.factor(df$region2)
 df$polyid2 <- as.factor(df$polyid2)
 # Load neighbour file
 nb_loc <- "../data/states_nbmatrix"
-nb <- read_inla_to_mgcv(nb_loc)
-nb2 <- subset_nb(nb, levels(df$polyid2))
+nbr <- read_inla_to_mgcv(nb_loc)
+nbr2 <- subset_nb(nbr, levels(df$polyid2))
 ```
 
 ## Fit model
@@ -91,7 +91,7 @@ Define formula, using single `spi` and `precip` variables.
 form <- formula(y ~ 1 +
                       offset(logpop) +
                       # Spatial effect – using a Markov random field smoother:
-                      s(polyid2, bs = "mrf", xt = list(nb = nb2)) +
+                      s(polyid2, bs = "mrf", xt = list(nb = nbr2)) +
                       # RW1 on year with one smooth per level of polyid2:
                       s(year, bs = "ps", m = 1, by = polyid2) +
                       # RW2 on epiWeek, cyclic, with one smooth per level of region2:
