@@ -9,6 +9,10 @@ format: gfm
 ```{r}
 library(brms)
 library(ggplot2)
+
+# requires cmdstanr and cmdstan: 
+# install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
+# cmdstanr::install_cmdstan()
 ```
 
 ```{r}
