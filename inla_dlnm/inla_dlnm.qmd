@@ -122,6 +122,7 @@ summary(fit)
 
 ## Lag predictors - based on Rachel Lowe, hydromet_deng repo
 
+```{r}
 model <- fit
 
 # extract full coef and vcov and create indicators for each term
@@ -138,7 +139,7 @@ predt <- crosspred(cb, coef = coef[indt], vcov=vcov[indt,indt],
 # contour and scenario plots for Tmin (Main text Fig 3)
 
 # contour plot of exposure-lag-response associations
-pdf("./inla_dlnm/contour.pdf", width = 6.5, height = 6)
+pdf("contour1.pdf", width = 6.5, height = 6)
 
 nlag <- ncol(spi3)
 y <- predt$predvar
@@ -162,5 +163,12 @@ filled.contour(x, y, z,
     col = cols, levels = levels,
     plot.axes = { axis(1, at = 0:nlag, c(0:nlag)) 
                  axis(2)})
+
+filled.contour(y, x, t(z),
+    ylab = "Lag", xlab = "SPI-3", main = "",
+    col = cols, levels = levels,
+    plot.axes = { axis(2, at = 0:nlag, c(0:nlag)) 
+                 axis(1)})
                  
 dev.off()
+```
