@@ -122,6 +122,7 @@ summary(fit)
 
 ## Lag predictors - based on Rachel Lowe, hydromet_deng repo
 
+```{r}
 model <- fit
 
 # extract full coef and vcov and create indicators for each term
@@ -162,5 +163,12 @@ filled.contour(x, y, z,
     col = cols, levels = levels,
     plot.axes = { axis(1, at = 0:nlag, c(0:nlag)) 
                  axis(2)})
+
+filled.contour(y, x, t(z),
+    ylab = "Lag", xlab = "SPI-3", main = "",
+    col = cols, levels = levels,
+    plot.axes = { axis(2, at = 0:nlag, c(0:nlag)) 
+                 axis(1)})
                  
 dev.off()
+```
