@@ -144,7 +144,7 @@ pdf("contour1.pdf", width = 6.5, height = 6)
 nlag <- ncol(spi3)
 y <- predt$predvar
 z <- t(predt$matRRfit)
-x <- seq(0, nlag, length.out = dim(z)[1])
+x <- seq(0, 180, length.out = dim(z)[1])
 
 length(y)
 length(x)
@@ -160,15 +160,11 @@ cols <- c(col1(sum(levels < 1)), col2(sum(levels > 1)))
 
 filled.contour(x, y, z,
     xlab = "Lag", ylab = "SPI-3", main = "",
-    col = cols, levels = levels,
-    plot.axes = { axis(1, at = 0:nlag, c(0:nlag)) 
-                 axis(2)})
+    col = cols, levels = levels)
 
 filled.contour(y, x, t(z),
     ylab = "Lag", xlab = "SPI-3", main = "",
-    col = cols, levels = levels,
-    plot.axes = { axis(2, at = 0:nlag, c(0:nlag)) 
-                 axis(1)})
+    col = cols, levels = levels)
                  
 dev.off()
 ```
