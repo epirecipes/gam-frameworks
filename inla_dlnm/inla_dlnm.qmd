@@ -1,0 +1,166 @@
+---
+title: "INLA DLNM model"
+author: "Nick Davies, Simon Frost"
+format: gfm
+---
+
+## Libraries
+
+```{r}
+library(INLA)
+library(ggplot2)
+library(dlnm)
+library(data.table)
+library(RColorBrewer)
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+```
+
+## Load data and process
+
+```{r}
+df <- read.table("../data/lassa_states_endemic.tsv", header=TRUE, row.names=NULL)
+# Exclude missing (forecast) datapoints
+df <- df[!is.na(df$y),]
+nb_loc <- "../data/states_nbmatrix"
+```
+
+```{r}
+vars <- c("y","logpop","polyid","polyid2","region", "region2","year","epiWeek","spi","precip")
+df2 <- df[,vars]
+```
+
+### Set up cross-basis
+
+```{r}
+setDT(df)
+spi3 = df[, .SD, .SDcols = patterns("^spi3_")]
+spi3_knots = quantile(spi3$spi3_0, c(1/3, 2/3), na.rm = TRUE)
+spi3_boundary = range(spi3, na.rm = TRUE)
+cb = crossbasis(spi3,
+     argvar = list(fun = "ns",
+                   knots = spi3_knots,
+                   Boundary.knots = spi3_boundary),
+     arglag = list(fun = "ns",
+                   knots = logknots(ncol(spi3), 2),
+                   intercept = TRUE)
+)
+```
+
+## Fit model
+
+Priors.
+
+```{r}
+# fixed effects priors
+control.fixed1 = list(
+  mean.intercept = 0, # prior mean for intercept
+  prec.intercept = 0.01, # prior precision for intercept
+  mean = 0, # prior mean for fixed effects
+  prec = 1,  # prior precision for (scaled) fixed effects
+  correlation.matrix = TRUE # compute posterior correlation matrix
+)
+
+# hyperpriors for iid, ar1, bym2
+hyper.iid = list(theta = list(prior="pc.prec", param=c(1, 0.01)))
+
+# for bym or bym2
+hyper.bym = list(theta1 = list(prior="pc.prec", param=c(1, 0.01)),
+                 theta2 = list(prior="pc.prec", param=c(1, 0.01)))
+hyper.bym2 = list(theta1 = list(prior="pc.prec", param=c(1, 0.01)),
+                  theta2 = list(prior="pc", param=c(0.5, 0.5)))
+
+# ar1
+hyper.ar1 = list(theta1 = list(prior='pc.prec', param=c(1, 0.01)), 
+                 rho = list(prior='pc.cor0', param = c(0.75, 0.5)))
+
+# random walk hyperparameters on smoothing
+hyper1.rw = list(prec = list(prior='pc.prec', param=c(0.1, 0.01))) # strictest; sd constrained to be low
+hyper2.rw = list(prec = list(prior='pc.prec', param=c(0.5, 0.01))) # medium
+hyper3.rw = list(prec = list(prior='pc.prec', param=c(1, 0.01))) # weakest; sd can be quite wide 
+```
+
+Define formula, using single `spi` and `precip` variables.
+
+```{r}
+form = formula(y ~ 1 +
+                 offset(logpop) + 
+                 f(polyid, model="bym2", graph=nb_loc, scale.model=TRUE, constr=TRUE, adjust.for.con.comp=TRUE, hyper=hyper.bym2) +
+                 f(year, model="rw1", replicate=polyid2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
+                 f(epiWeek, model="rw2", cyclic=TRUE, replicate=region2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
+                 # f(spi, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
+                 f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
+                 cb)
+```
+
+```{r}
+fit <- inla(form,
+            verbose = FALSE,
+            data = df,
+            family = "nbinomial",
+            control.fixed = control.fixed1, # prior precision for (scaled) fixed effects
+            control.predictor=list(compute=TRUE,
+                                   link=1),
+            control.compute=list(cpo=TRUE,
+                                 waic=TRUE,
+                                 dic=TRUE,
+                                 config=TRUE,
+                                 return.marginals=TRUE),
+            control.inla = list(strategy='adaptive', # adaptive gaussian
+                                cmin=0), # fixing Q factorisation issue https://groups.google.com/g/r-inla-discussion-group/c/hDboQsJ1Mls)
+            inla.mode = "experimental")
+
+```
+
+## Model summary
+
+```{r}
+summary(fit)
+```
+
+## Lag predictors - based on Rachel Lowe, hydromet_deng repo
+
+model <- fit
+
+# extract full coef and vcov and create indicators for each term
+coef <- model$summary.fixed$mean
+vcov <- model$misc$lincomb.derived.covariance.matrix
+
+# find position of the terms associated with crossbasis
+indt <- grep("^v", model$names.fixed)
+
+# extract predictions from the DLNM centred on overall mean 
+predt <- crosspred(cb, coef = coef[indt], vcov=vcov[indt,indt],
+                   model.link = "log", bylag = 0.25, cen = round(mean(df$spi3_0), 0)) 
+
+# contour and scenario plots for Tmin (Main text Fig 3)
+
+# contour plot of exposure-lag-response associations
+pdf("./inla_dlnm/contour.pdf", width = 6.5, height = 6)
+
+nlag <- ncol(spi3)
+y <- predt$predvar
+z <- t(predt$matRRfit)
+x <- seq(0, nlag, length.out = dim(z)[1])
+
+length(y)
+length(x)
+dim(z)
+
+image(z)
+
+pal <- rev(brewer.pal(11, "PRGn"))
+levels <- pretty(z, 20)
+col1 <- colorRampPalette(pal[1:6])
+col2 <- colorRampPalette(pal[6:11])
+cols <- c(col1(sum(levels < 1)), col2(sum(levels > 1)))
+
+filled.contour(x, y, z,
+    xlab = "Lag", ylab = "SPI-3", main = "",
+    col = cols, levels = levels,
+    plot.axes = { axis(1, at = 0:nlag, c(0:nlag)) 
+                 axis(2)})
+                 
+dev.off()
