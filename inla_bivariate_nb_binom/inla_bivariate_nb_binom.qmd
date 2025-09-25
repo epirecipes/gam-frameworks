@@ -131,8 +131,8 @@ form <- Y ~ 0 + k1 + k2 + offset(logpop) +
 fit <- inla(form,
             verbose = FALSE,
             data = dat,
-            family = c("nbinomial","binomial"),
-            control.family = list(pc.prec1, list()),
+            family = c("nbinomial","betabinomial"),
+            control.family = list(pc.prec1,list()),
             #Ntrials = Ntrials, # <- only second likelihood uses it
             Ntrials = df2$yt,
             control.fixed = control.fixed1,

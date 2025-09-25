@@ -82,8 +82,24 @@ nbr2 <- subset_nb(nbr, levels(df$polyid2))
 ```{r}
 vars <- c("y","logpop","polyid","polyid2","region", "region2","year","epiWeek","spi","precip")
 df2 <- df[,vars]
-df2_list <- as.list(df2)
-df2_list$nbr2 <- nbr2
+df2$nbr2 <- rep(list(nbr2), nrow(df2))   # attach adjacency as a list-column
+#df2_list <- as.list(df2)
+#df2_list$nbr2 <- nbr2
+#df2_list$nb <- nbr2
+```
+
+```{r}
+# Check unique values for variables used in P-spline smooths
+cat("Unique values in variables used for P-spline smooths:\n")
+cat("year:", length(unique(df2$year)), "unique values\n")
+cat("spi:", length(unique(df2$spi)), "unique values\n") 
+cat("precip:", length(unique(df2$precip)), "unique values\n")
+
+# For the year smooth with 'by' grouping, check per group
+cat("\nFor year smooth by polyid2:\n")
+year_by_region <- tapply(df2$year, df2$polyid2, function(x) length(unique(x)))
+print(year_by_region)
+cat("Minimum unique years per region:", min(year_by_region), "\n")
 ```
 
 ## Fit model
@@ -94,9 +110,9 @@ Define formula, using single `spi` and `precip` variables.
 form <- formula(y ~ 1 +
                       offset(logpop) +
                       # Spatial effect – using a Markov random field smoother:
-                      s(polyid2, bs = "mrf", xt = nbr2) +
+                      s(polyid2, bs = "mrf", xt = list(nb=nbr2)) +
                       # RW1 on year with one smooth per level of polyid2:
-                      s(year, bs = "ps", m = 1, by = polyid2) +
+                      s(year, bs = "ps", k=9, m = 1, by = polyid2) +
                       # RW2 on epiWeek, cyclic, with one smooth per level of region2:
                       s(epiWeek, bs = "cc", m = 2, by = region2) +
                       # RW2 on spi:
@@ -105,9 +121,9 @@ form <- formula(y ~ 1 +
                       s(precip, bs = "ps", k=12))
 ```
 
-
 ```{r}
-fit <- mvgam(form, data=df2_list, family=nb())
+#| echo: false
+fit <- mvgam(form, data=df2, family=nb())
 ```
 
 ## Model summary
@@ -116,6 +132,8 @@ fit <- mvgam(form, data=df2_list, family=nb())
 summary(fit)
 ```
 
-
 ## Model diagnostics
 
+```{r}
+plot(fit)
+```

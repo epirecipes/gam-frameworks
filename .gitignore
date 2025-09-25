@@ -9,3 +9,7 @@
 *~
 .localized
 .Rproj.user
+
+.RHistory
+.RData
+
