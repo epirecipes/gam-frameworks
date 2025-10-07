@@ -12,6 +12,7 @@ library(ggplot2)
 library(dlnm)
 library(data.table)
 library(RColorBrewer)
+library(stringr)
 ```
 
 ```{r}
@@ -35,18 +36,37 @@ df2 <- df[,vars]
 ### Set up cross-basis
 
 ```{r}
-setDT(df)
-spi3 = df[, .SD, .SDcols = patterns("^spi3_")]
-spi3_knots = quantile(spi3$spi3_0, c(1/3, 2/3), na.rm = TRUE)
-spi3_boundary = range(spi3, na.rm = TRUE)
-cb = crossbasis(spi3,
-     argvar = list(fun = "ns",
-                   knots = spi3_knots,
-                   Boundary.knots = spi3_boundary),
-     arglag = list(fun = "ns",
-                   knots = logknots(ncol(spi3), 2),
-                   intercept = TRUE)
-)
+
+get_crossbasis = function(df, colstart, xknots_q, tknots_n, prefix = "v")
+{
+    stopifnot(length(xknots_q) > 2)
+    stopifnot(tknots_n > 1)
+    setDT(df)
+    
+    # Get lagged data; each successive column is at a longer lag time
+    data = df[, .SD, .SDcols = patterns(paste0("^", colstart))]
+    
+    # Inner knots and boundary points
+    points = quantile(data[, 1], xknots_q, na.rm = TRUE)
+    boundary = c(points[1], tail(points, 1))
+    knots = head(tail(points, -1), -1)
+    
+    # knots along time dimension: this is in units of lags, not units of
+    # time per se (e.g. if lag is 0, 30, 60 then lag is ...?)
+    # TODO looking at the output of logknots, I can't really make sense of it...
+    tk = ncol(data)^(1/tknots_n)
+    tknots = tk^(0:(tknots_n - 1))
+    
+    cb = crossbasis(data,
+       argvar = list(fun = "ns", knots = knots, Boundary.knots = boundary),
+       arglag = list(fun = "ns", knots = tknots, intercept = TRUE)
+    )
+    colnames(cb) = str_replace(colnames(cb), "^v", prefix)
+    cb
+}
+
+cb_spi3 = get_crossbasis(df, "spi3_", c(0, 1/3, 2/3, 1), 3, "spi3_")
+cb_precip = get_crossbasis(df, "precip_[0-9]+$", c(0, 1/3, 2/3, 1), 3, "precip_")
 ```
 
 ## Fit model
@@ -82,7 +102,7 @@ hyper2.rw = list(prec = list(prior='pc.prec', param=c(0.5, 0.01))) # medium
 hyper3.rw = list(prec = list(prior='pc.prec', param=c(1, 0.01))) # weakest; sd can be quite wide 
 ```
 
-Define formula, using single `spi` and `precip` variables.
+Define formula, using lag for `spi3` and `precip` variables.
 
 ```{r}
 form = formula(y ~ 1 +
@@ -91,8 +111,9 @@ form = formula(y ~ 1 +
                  f(year, model="rw1", replicate=polyid2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
                  f(epiWeek, model="rw2", cyclic=TRUE, replicate=region2, scale.model=TRUE, constr=TRUE, hyper=hyper3.rw) +
                  # f(spi, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
-                 f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
-                 cb)
+                 # f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
+                 cb_spi3 +
+                 cb_precip) # unname because otherwise the names in these two matrices conflict.
 ```
 
 ```{r}
@@ -124,24 +145,26 @@ summary(fit)
 
 ```{r}
 model <- fit
+pattern <- "^spi3"
+
+plot_lag_surface = function(model, pattern) {}
 
 # extract full coef and vcov and create indicators for each term
 coef <- model$summary.fixed$mean
 vcov <- model$misc$lincomb.derived.covariance.matrix
 
 # find position of the terms associated with crossbasis
-indt <- grep("^v", model$names.fixed)
+indt <- grep(pattern, model$names.fixed)
 
 # extract predictions from the DLNM centred on overall mean 
-predt <- crosspred(cb, coef = coef[indt], vcov=vcov[indt,indt],
+predt <- crosspred(cb_precip, coef = coef[indt], vcov=vcov[indt,indt],
                    model.link = "log", bylag = 0.25, cen = round(mean(df$spi3_0), 0)) 
 
 # contour and scenario plots for Tmin (Main text Fig 3)
 
 # contour plot of exposure-lag-response associations
-pdf("contour1.pdf", width = 6.5, height = 6)
+pdf("contour2.pdf", width = 6.5, height = 6)
 
-nlag <- ncol(spi3)
 y <- predt$predvar
 z <- t(predt$matRRfit)
 x <- seq(0, 180, length.out = dim(z)[1])
@@ -159,11 +182,11 @@ col2 <- colorRampPalette(pal[6:11])
 cols <- c(col1(sum(levels < 1)), col2(sum(levels > 1)))
 
 filled.contour(x, y, z,
-    xlab = "Lag", ylab = "SPI-3", main = "",
+    xlab = "Lag", ylab = "Precipitation (mm)", main = "",
     col = cols, levels = levels)
 
 filled.contour(y, x, t(z),
-    ylab = "Lag", xlab = "SPI-3", main = "",
+    ylab = "Lag", xlab = "Precipitation (mm)", main = "",
     col = cols, levels = levels)
                  
 dev.off()
