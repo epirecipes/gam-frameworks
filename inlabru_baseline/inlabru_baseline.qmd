@@ -1,0 +1,120 @@
+---
+title: "inlabru baseline model"
+author: "Simon Frost"
+format: gfm
+---
+
+## Libraries
+
+```{r}
+library(INLA)
+library(inlabru)
+library(ggplot2)
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+```
+
+## Load data and process
+
+```{r}
+df <- read.table("../data/lassa_states_endemic.tsv", header=TRUE, row.names=NULL)
+# Exclude missing (forecast) datapoints
+df <- df[!is.na(df$y),]
+nb_loc <- "../data/states_nbmatrix"
+```
+
+```{r}
+vars <- c("y","logpop","polyid","polyid2","region", "region2","year","epiWeek","spi","precip")
+df2 <- df[,vars]
+```
+
+## Fit model
+
+Priors.
+
+```{r}
+# fixed effects priors
+control.fixed1 = list(mean.intercept=0, # prior mean for intercept
+                      prec.intercept=0.01, # prior precision for intercept
+                      mean=0, # prior mean for fixed effects
+                      prec=1)  # prior precision for (scaled) fixed effects
+
+# hyperpriors for iid, ar1, bym2
+hyper.iid = list(theta = list(prior="pc.prec", param=c(1, 0.01)))
+
+# for bym or bym2
+hyper.bym = list(theta1 = list(prior="pc.prec", param=c(1, 0.01)),
+                 theta2 = list(prior="pc.prec", param=c(1, 0.01)))
+hyper.bym2 = list(theta1 = list(prior="pc.prec", param=c(1, 0.01)),
+                  theta2 = list(prior="pc", param=c(0.5, 0.5)))
+
+# ar1
+hyper.ar1 = list(theta1 = list(prior='pc.prec', param=c(1, 0.01)), 
+                 rho = list(prior='pc.cor0', param = c(0.75, 0.5)))
+
+# random walk hyperparameters on smoothing
+hyper1.rw = list(prec = list(prior='pc.prec', param=c(0.1, 0.01))) # strictest; sd constrained to be low
+hyper2.rw = list(prec = list(prior='pc.prec', param=c(0.5, 0.01))) # medium
+hyper3.rw = list(prec = list(prior='pc.prec', param=c(1, 0.01))) # weakest; sd can be quite wide 
+```
+
+Components mirror the INLA f() terms.
+
+- `Intercept(1)` gives an explicit intercept component; its prior is set via control.fixed
+- For BYM2, we pass the same neighborhood graph file and options as in INLA
+
+```{r}
+cmp <- ~
+  Intercept(1) +
+  spatial(polyid, model = "bym2",
+          graph = nb_loc,
+          scale.model = TRUE, constr = TRUE, adjust.for.con.comp = TRUE,
+          hyper = hyper.bym2) +
+  year(year, model = "rw1",
+       replicate = polyid2,
+       scale.model = TRUE, constr = TRUE,
+       hyper = hyper3.rw) +
+  epiWeek(epiWeek, model = "rw2",
+          cyclic = TRUE,
+          replicate = region2,
+          scale.model = TRUE, constr = TRUE,
+          hyper = hyper3.rw) +
+  spi(spi, model = "rw2",
+      scale.model = TRUE, constr = TRUE,
+      hyper = hyper2.rw) +
+  precip(precip, model = "rw2",
+         scale.model = TRUE, constr = TRUE,
+         hyper = hyper2.rw)
+```
+
+This is our observation model, that refers to the above components by the names we have assigned.
+
+```{r}
+obs <- bru_obs(
+  formula = y ~ Intercept + offset(logpop) + spatial + year + epiWeek + spi + precip,
+  family = "nbinomial",
+  data = df2
+)
+```
+
+```{r}
+fit <- bru(
+  cmp,
+  obs,
+  options = list(
+    control.fixed = control.fixed1,
+    control.predictor = list(compute = TRUE, link = 1),
+    control.compute = list(cpo = TRUE, waic = TRUE, dic = TRUE,
+                           config = TRUE, return.marginals = TRUE),
+    control.inla = list(strategy = "adaptive", cmin = 0)  # same workaround you used
+  )
+)
+```
+
+## Model summary
+
+```{r}
+summary(fit)
+```
