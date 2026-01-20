@@ -104,7 +104,9 @@ form <- formula(y ~ 1 +
 
 
 ```{r}
-fit <- gam(form, data=df, family=nb())
+# bam needed with more data
+# fit <- gam(form, data=df, family=nb())
+fit <- bam(form, data=df, family=nb())
 ```
 
 ## Model summary
