@@ -28,11 +28,6 @@ df <- df[!is.na(df$y),]
 nb_loc <- "../data/states_nbmatrix"
 ```
 
-```{r}
-vars <- c("y","logpop","polyid","polyid2","region", "region2","year","epiWeek","spi","precip")
-df2 <- df[,vars]
-```
-
 ### Set up cross-basis
 
 ```{r}
@@ -113,7 +108,7 @@ form = formula(y ~ 1 +
                  # f(spi, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
                  # f(precip, model="rw2", scale.model=TRUE, constr=TRUE, hyper=hyper2.rw) +
                  cb_spi3 +
-                 cb_precip) # unname because otherwise the names in these two matrices conflict.
+                 cb_precip)
 ```
 
 ```{r}
@@ -144,50 +139,38 @@ summary(fit)
 ## Lag predictors - based on Rachel Lowe, hydromet_deng repo
 
 ```{r}
-model <- fit
-pattern <- "^spi3"
+plot_lag_surface = function(model, cb, pattern, name, cen)
+{
+    # extract full coef and vcov and create indicators for each term
+    coef <- model$summary.fixed$mean
+    vcov <- model$misc$lincomb.derived.covariance.matrix
+    
+    # find position of the terms associated with crossbasis
+    indt <- grep(pattern, model$names.fixed)
 
-plot_lag_surface = function(model, pattern) {}
+    # extract predictions from the DLNM centred on overall mean 
+    predt <- crosspred(cb, coef = coef[indt], vcov = vcov[indt,indt],
+                       model.link = "log", bylag = 0.25, cen = cen) 
+    
+    # contour plot of exposure-lag-response associations
+    x <- predt$predvar
+    z <- predt$matRRfit
+    y <- seq(0, 180, length.out = dim(z)[2])
 
-# extract full coef and vcov and create indicators for each term
-coef <- model$summary.fixed$mean
-vcov <- model$misc$lincomb.derived.covariance.matrix
+    pal <- rev(brewer.pal(11, "PRGn"))
+    levels <- pretty(z, 20)
+    col1 <- colorRampPalette(pal[1:6])
+    col2 <- colorRampPalette(pal[6:11])
+    cols <- c(col1(sum(levels < 1)), col2(sum(levels > 1)))
 
-# find position of the terms associated with crossbasis
-indt <- grep(pattern, model$names.fixed)
+    filled.contour(x, y, z,
+        xlab = name, ylab = "Lag (days)", main = "",
+        col = cols, levels = levels)
+}
 
-# extract predictions from the DLNM centred on overall mean 
-predt <- crosspred(cb_precip, coef = coef[indt], vcov=vcov[indt,indt],
-                   model.link = "log", bylag = 0.25, cen = round(mean(df$spi3_0), 0)) 
-
-# contour and scenario plots for Tmin (Main text Fig 3)
-
-# contour plot of exposure-lag-response associations
-pdf("contour2.pdf", width = 6.5, height = 6)
-
-y <- predt$predvar
-z <- t(predt$matRRfit)
-x <- seq(0, 180, length.out = dim(z)[1])
-
-length(y)
-length(x)
-dim(z)
-
-image(z)
-
-pal <- rev(brewer.pal(11, "PRGn"))
-levels <- pretty(z, 20)
-col1 <- colorRampPalette(pal[1:6])
-col2 <- colorRampPalette(pal[6:11])
-cols <- c(col1(sum(levels < 1)), col2(sum(levels > 1)))
-
-filled.contour(x, y, z,
-    xlab = "Lag", ylab = "Precipitation (mm)", main = "",
-    col = cols, levels = levels)
-
-filled.contour(y, x, t(z),
-    ylab = "Lag", xlab = "Precipitation (mm)", main = "",
-    col = cols, levels = levels)
-                 
+pdf("contour2.pdf", width = 6.5, height = 5, onefile = TRUE)
+plot_lag_surface(fit, cb_spi3, "^spi3", "SPI-3", cen = 0)
+plot_lag_surface(fit, cb_precip, "^precip", "Precipitation (mm)", cen = 7)
 dev.off()
+
 ```
