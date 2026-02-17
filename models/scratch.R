@@ -9,16 +9,23 @@
 # Evaluate predictive accuracy
 # Validate predictive accuracy, with differing model terms and hyperparameters
 
+# For INLA, "zeroinflatednbinomial0" seems to fit better than nbinomial.
+
 library(data.table)
 library(ggplot2)
 
 source("./models/model.R")
+source("./models/score.R")
 source("./models/v_inla.R")
 source("./models/v_mgcv.R")
+source("./models/v_ml.R")
 
 x = source("./models/data.R", local = new.env())$value
 data = x$df
 nb_loc = "./data/states_nb.csv" # x$nb_loc
+
+# TEMP: remove data with irregular spacing (because no climate data...)
+data = data[date <= "2025-10-17"]
 
 formula = y ~
     Offset(logpop) + 
@@ -54,237 +61,148 @@ mod$terms$epiWeek$plot(mod, fit)
 mod$terms$spi3$plot(mod, fit)
 mod$terms$adminName$plot(mod, fit)
 
-bloop = smooth_estimates(fit, "te(", partial_match = TRUE)
-ggplot(bloop) +
-    geom_raster(aes(x = spi3_distlag, y = t_distlag, fill = .estimate)) +
-    scale_fill_gradient2()
 
+# Looking at prediction
+schema = fread(
+"train_begin,  train_end, test_begin,   test_end
+2018-01-01,   2019-10-01, 2019-10-01, 2020-10-01
+2018-01-01,   2020-10-01, 2020-10-01, 2021-10-01
+2018-01-01,   2021-10-01, 2021-10-01, 2022-10-01
+2018-01-01,   2022-10-01, 2022-10-01, 2023-10-01
+2018-01-01,   2023-10-01, 2023-10-01, 2024-10-01
+2018-01-01,   2024-10-01, 2024-10-01, 2025-10-01")
 
-xxx = read_graph_mgcv(file)
-mod$data$adminName2 = factor(mod$data$adminName, names(xxx))
-mod$data$adminName3 = as.integer(mod$data$adminName2)
-table(mod$data$adminName3)
-yyy = read_graph_inla(file)
-xxx = lapply(xxx, function(x) match(x, names(xxx)))
-names(xxx) = NULL
-mod$env$nb = xxx
+# to do...
+# prediction - yes
+# scores - working on it
+# random forest
+# make consistent the treatment of incomplete cases
 
-gam(y ~ s(adminName3, bs = "mrf", xt = list(nb = mod$env$nb)), family = "nb", data = mod$data)
+# this makes little difference
+data[!is.na(year), year := lubridate::year(date + 92)]
 
+# testing this
+data[!is.na(year) & year == 2021, covid := TRUE]
+data[!is.na(year) & year != 2021, covid := FALSE]
 
-ls(x)
-x$formula
-x$make
-# term = function(term, ..., .env = parent.frame())
-# {
-#     list(
-#         term = do.call(rlang::expr, list(substitute(term)), envir = .env),
-#         extras = list(...)
-#     )
-# }
-# 
-# fit_model = function(model)
-# {
-#     fit = match.fun(paste0("fit_model.", environment(model)$vehicle))
-#     fit(model)
-# }
+# TODO
+# make offset proper for ML model
+# test bart for count data (?)
 
-
-
-# example data
-library(data.table)
-library(mgcv)
-
-dt = data.table(t = seq(0, 2 * pi, length.out = 20))
-dt[, y := sin(t) + rnorm(20, 0, 0.4)]
-plot(dt)
-
-y = dt$y
-t = dt$t
-yy = dt$y
-tt = dt$t
-
-?s
-
-g = new_generator("miscellaneous", dt)
-bs = "tp" # "tp"
-var_bs = new_var(g, "my_bs")
-add_code(g, { !!var_bs = !!bs })
-set_lhs(g, quote(y))
-add_rhs(g, quote(s(t, bs = my_bs)))
-finalize(g)
-
-test = g$make()
-test
-ls(environment(test))
-environment(test)$my_bs
-class(environment(test)$my_bs)
-
-plot(gam(formula = test, data = dt))
-plot(gam(formula = test))
-
-library(INLA)
-summary(inla(yy ~ tt, data = dt))
-
-
-
-# Old old old 
-
-source("./models/inla/inla_model.R")
-source("./models/inla/inla_terms.R")
-source("./models/model.R")
-library(ggplot2)
-
-x = source("./models/data.R", local = new.env())$value
-data = x$df
-nb_loc = x$nb_loc
-
-formula = y ~ 1 + 
+formula = y ~
     Offset(logpop) + 
-    Spatial(polyid, graph_file = nb_loc) +
+    covid +
     Trend(year, by = adminName) +
-    Cycle(epiWeek, by = region) #+ 
-    # FixedLag(precip, t = date, lag = 90, window = 60, group = adminName)
-    DistributedLag(precip, group = adminName, lags = seq(30, 150, by = 1)) +
-    DistributedLag(spi3, group = adminName, lags = seq(30, 150, by = 1))
-    # FixedLag(spi3, t = date, lag = 90, window = 60, group = adminName)
-    # spi3
-    # DistributedLag(spi12, group = adminName)
-    # DistributedLag(spi1, group = adminName)
+    Cycle(epiWeek, by = region) + 
+    Spatial(adminName, graph_file = nb_loc) +
+    FixedLag(precip, t = date, lag = 90, window = 60, group = adminName) +
+    DistributedLag(spi3, group = adminName, lags = seq(0, 150, by = 1),
+      tknots_n = 5, xknots_q = seq(0, 1, by = 0.2))
 
 set.seed(123)
-mod = make_model(formula, "inla", data)
-
-# TODO big problem here, prior is not working with !! approach
-# Note the difference between these two: is this why?
-environment(mod)$terms$year$term[[7]]
-environment(mod)$terms$epiWeek$term[[8]]
-
-
-
-fit = fit_model(mod)
-environment(mod)$terms$epiWeek$plot(mod, fit)
-
-environment(mod)$terms$year$plot(mod, fit)
-environment(mod)$terms$epiWeek$plot(mod, fit)
-environment(mod)$terms$precip$plot(mod, fit)
-environment(mod)$terms$spi3$plot(mod, fit)
-
-summary(fit) # WAIC = 7967.23
-plot(fit)
-
-x = inla.posterior.sample(1000, fit)
-xx = inla.posterior.sample.eval(function() return (Predictor), x)
-
-
-
-# prior test
-max = 144
-set.seed(123)
-dat = data.table(time = 1:max, temp = 20 + 10 * sin(2*pi*(1:max)/12) + rnorm(max))
-
-proportion = 0.5
-num = round(max * proportion)
-dat$time[sample.int(max, num)] = dat$time[sample.int(max, num)]
-dat[, month := (time - 1) %% 12]
-
-fit = inla(temp ~ f(month, model = "rw2", cyclic = TRUE, scale.model = TRUE, constr = TRUE, 
-  hyper = list(theta = list(prior = "pc.prec", param = c(0.8, 0.01)))), data = dat)
-plot(fit, plot.random.effects = TRUE, plot.hyperparameters = FALSE, plot.predictor = FALSE, plot.fixed.effects = FALSE,
-  plot.lincomb = FALSE, plot.q = FALSE)
-plot(dat$time, dat$temp)
-
-fit = inla(y ~ f(epiWeek, model = "rw2", replicate = region2, cyclic = TRUE, scale.model = TRUE, constr = TRUE, hyper = list("prec" = list(prior = "pc.prec", param = c(0.01, 0.01)))), 
-  data = data)
-plot(fit, plot.random.effects = TRUE, plot.hyperparameters = FALSE, plot.predictor = FALSE, plot.fixed.effects = FALSE,
-  plot.lincomb = FALSE, plot.q = FALSE)
-
-
-
-model = fit
-cb = environment(mod)$cb[[1]]
-pattern = "^precip"
-name = "precip"
-cen = 0
-
-
-
-pdf("contour2.pdf", width = 6.5, height = 5, onefile = TRUE)
-plot_lag_surface(fit, cb_spi3, "^spi3", "SPI-3", cen = 0)
-plot_lag_surface(fit, cb_precip, "^precip", "Precipitation (mm)", cen = 7)
-
-
-# prediction loop
-
-cutoffs = lubridate::make_date(year = rep(2019:2024, each = 2), month = c(1, 7))
 
 results = list()
-for (cut in as.character(cutoffs)) {
-  print(cut)
-  data2 = copy(data)
-  data2[, y_orig := y]
-  data2[date >= cut, y := NA]
-  mod = make_model(formula, "inla", data2)
-  fit = fit_model(mod)
-  data2[, y_mean := fit$summary.fitted.values$mean]
-  
-  results[[cut]] = data2[date >= cut & !is.na(y_orig), .(adminCode, date, y_mean, y_orig, forecast_date = as.Date(cut))]
+presults = list()
+
+for (vehicle in c("mgcv", "inla", "ml")) {
+    for (r in seq_len(nrow(schema))) {
+        cat("Prediction", r, "...\n")
+        
+        data_train = data[date >= schema[r, train_begin] & date < schema[r, train_end]]
+        data_test  = data[date >= schema[r, test_begin] & date < schema[r, test_end]]
+        model = make_model(formula, vehicle, data_train, data_test)
+        fit = fit_model(model)
+        
+        LS = fit$traj[set == "test" & !is.na(eta), log_score_nb(y_obs[1], exp(eta), theta), by = id][, mean(V1)]
+        # QS = fit$traj[set == "test" & !is.na(eta), quad_score_nb(y_obs[1], exp(eta), theta), by = id][, mean(V1)]
+        # RS = fit$traj[set == "test" & !is.na(eta), rp_score_nb(y_obs[1], exp(eta), theta), by = id][, mean(V1)]
+        results[[paste0(vehicle, r)]] = data.table(LS = LS)
+        
+        # Plotting data
+        pdata = fit$traj[, .(
+          lo = quantile(y_pred, 0.025, na.rm = TRUE), 
+          av = mean(y_pred, na.rm = TRUE),
+          hi = quantile(y_pred, 0.975, na.rm = TRUE)), 
+          by = .(id, row, set, y_obs)]
+        
+        pdata = merge(pdata, fit$data[, .(adminCode, date, adminName, row = 1:.N)], by = "row")
+        presults[[paste0(vehicle, r)]] = pdata
+    }
 }
-res = rbindlist(results)
 
-ggplot(res) +
-  geom_line(aes(x = date, y = y_mean, colour = as.factor(forecast_date))) +
-  geom_point(aes(x = date, y = y_orig)) + 
-  facet_wrap(~adminCode) + scale_y_log10()
+res1 = rbindlist(results, idcol = "part")
+res2 = rbindlist(presults, idcol = "part")
 
-ggplot(res[forecast_date >= "2022-01-01"]) +
-  geom_line(aes(x = date, y = y_mean, colour = as.factor(forecast_date))) +
-  geom_point(aes(x = date, y = y_orig)) + 
-  facet_wrap(~adminCode)
+res2[, vehicle := stringr::str_remove(part, "[0-9]+$")]
+res2[, stage := as.integer(stringr::str_extract(part, "[0-9]+$"))]
 
-# ok let's compare precip_0 from data to climate.
-library(data.table)
-library(ggplot2)
-library(zoo)
+ggplot(res2[set == "test"]) + 
+    geom_ribbon(aes(x = date, ymin = lo, ymax = hi, fill = stage, group = stage), alpha = 0.5) +
+    geom_point(aes(x = date, y = y_obs), size = 0.2) +
+    geom_line(aes(x = date, y = av, colour = set)) +
+    coord_cartesian(ylim = c(0, 150)) +
+    facet_grid(vehicle ~ adminName)
 
-d2 = as.data.table(data)
-data0 = d2[, .(adminCode, date, precip_0)]
-
-climate0 = climate[, .(adminCode, date, precip)]
-climate0[, precip_c0 := frollmean(precip, n = 60, align = "right", na.rm = TRUE), by = adminCode]
-
-ddd = merge(data0, climate0, by = c("adminCode", "date"))
-ggplot(ddd) + geom_point(aes(x = precip_0, y = precip_c0))
-
-lm(precip_0 ~ precip_c0, data = ddd)
+ggplot(res2[vehicle == "ml"]) +
+    geom_ribbon(aes(x = date, ymin = lo, ymax = hi, fill = set, group = set), alpha = 0.5) +
+    geom_point(aes(x = date, y = y_obs), size = 0.2) +
+    geom_line(aes(x = date, y = av, colour = set)) +
+    coord_cartesian(ylim = c(0, 150)) +
+    facet_grid(part ~ adminName)
+  
 
 
+res2[, vehicle := stringr::str_remove(variable, "[0-9]+$")]
+res2[, stage := as.integer(stringr::str_extract(variable, "[0-9]+$"))]
 
-# experiment with random forest
-data_rf = data[!is.na(y)]
-data_rf[, y_rate := (y + 0.5) / exp(logpop)]
+res = melt(as.data.table(results), id.vars = character(0))
+res[, vehicle := stringr::str_remove(variable, "[0-9]+$")]
+res[, stage := as.integer(stringr::str_extract(variable, "[0-9]+$"))]
 
-data_rf2 = data_rf[date < "2023-10-01"]
+pdata = fit$traj[, .(
+  lo = quantile(y_pred, 0.025, na.rm = TRUE), 
+  av = mean(y_pred, na.rm = TRUE),
+  hi = quantile(y_pred, 0.975, na.rm = TRUE)), 
+  by = .(id, row, set, y_obs)]
 
-# train a default random forest model
-rf1 = ranger::ranger(
-  y_rate ~ adminCode + year + epiWeek + precip + spi3, 
-  data = data_rf2,
-  mtry = 2,
-  respect.unordered.factors = "order",
-  seed = 123
+pdata = merge(pdata, fit$data[, .(adminCode, date, adminName, row = 1:.N)], by = "row")
+
+ggplot(pdata) + 
+  geom_ribbon(aes(x = date, ymin = lo, ymax = hi, fill = set), alpha = 0.5) +
+  geom_point(aes(x = date, y = y_obs), size = 0.2) +
+  geom_line(aes(x = date, y = av, colour = set)) +
+  facet_wrap(~adminName)
+
+
+#
+
+
+
+
+
+
+
+
+
+## Quantile regression forest
+rf2 = ranger::ranger(
+    y_rate ~ adminCode + year + epiWeek + precip + spi3, 
+    data = data_rf2,
+    mtry = 2,
+    respect.unordered.factors = "order",
+    seed = 123,
+    quantreg = TRUE,
+    keep.inbag = TRUE # this changes quantile regression - how?
 )
+pred = predict(rf2, data = data_rf, type = "quantiles", quantiles = c(0.025, 0.5, 0.975, 0.99999))
+data_rf$pred_lo = pred$predictions[, 1]
+data_rf$pred_md = pred$predictions[, 2]
+data_rf$pred_hi = pred$predictions[, 3]
 
-x = predict(rf1, data = data_rf)
-data_rf[, pred := x$predictions]
-
-library(ggplot2)
-
-ggplot(data_rf) +
-  geom_line(aes(x = date, y = y_rate)) +
-  geom_line(aes(x = date, y = pred, colour = "prediction")) +
-  facet_wrap(~adminCode)
-
-# get OOB RMSE
-(default_rmse <- sqrt(ames_rf1$prediction.error))
-## [1] 24859.27
+ggplot(data_rf[adminCode == "NG029"]) +
+    geom_line(aes(x = date, y = y_rate)) +
+    geom_line(aes(x = date, y = pred, colour = "prediction")) +
+    geom_line(aes(x = date, y = pred_lo, colour = "quantiles")) +
+    geom_line(aes(x = date, y = pred_md, colour = "quantiles")) +
+    geom_line(aes(x = date, y = pred_hi, colour = "quantiles")) +
+    facet_wrap(~adminCode)

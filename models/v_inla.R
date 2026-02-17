@@ -204,26 +204,63 @@ DistributedLag.inla = function(g, x, group = NULL, lags = seq(0, 180, by = 30),
 
 
 
-fit_model.inla = function(model)
+fit_model.inla = function(model, nsamp)
 {
     # fixed effects priors
     control.fixed1 = list(
-      mean.intercept = 0, # prior mean for intercept
-      prec.intercept = 0.01, # prior precision for intercept
-      mean = 0, # prior mean for fixed effects
-      prec = 1,  # prior precision for (scaled) fixed effects
-      correlation.matrix = TRUE # compute posterior correlation matrix
+        mean.intercept = 0, # prior mean for intercept
+        prec.intercept = 0.01, # prior precision for intercept
+        mean = 0, # prior mean for fixed effects
+        prec = 1,  # prior precision for (scaled) fixed effects
+        correlation.matrix = TRUE # compute posterior correlation matrix
     )
     
-    inla(model$formula,
-        verbose = FALSE, data = model$data[model$valid], family = "nbinomial",
-        control.fixed = control.fixed1, 
-        control.predictor = list(compute = TRUE, link = 1),
+    # Model fit
+    cat("Fitting...\n");
+    fit = inla(
+        formula = model$formula,
+        family = "nbinomial",
+        data = model$data[model$valid],
+        weights = model$weights[model$valid],
+        verbose = FALSE, 
         control.compute = list(cpo = TRUE, waic = TRUE, dic = TRUE, config = TRUE, return.marginals = TRUE),
+        control.predictor = list(compute = TRUE, link = 1),
         control.inla = list(
             strategy = "adaptive", # adaptive gaussian
             cmin = 0 # fixing Q factorisation issue https://groups.google.com/g/r-inla-discussion-group/c/hDboQsJ1Mls)
         ),
+        control.fixed = control.fixed1, 
         inla.mode = "experimental"
     )
+    
+    # Build data
+    data = model$data
+    data = cbind(data, Set = model$set)
+    
+    # Get prediction
+    cat("Response...\n");
+    data[model$valid, "Mean"] = fit$summary.fitted.values$mean
+    data[model$valid, "Median"] = fit$summary.fitted.values$`0.5quant`
+    data[model$valid, "Lo95"] = fit$summary.fitted.values$`0.025quant`
+    data[model$valid, "Hi95"] = fit$summary.fitted.values$`0.975quant`
+    
+    # Sample trajectories
+    cat("Sampling trajectories...\n")
+    psamp = inla.posterior.sample(nsamp, fit)
+    isize = which(names(psamp[[1]]$hyperpar) %like% "^size for (the )?nbinomial")
+    irows = which(rownames(psamp[[1]]$latent) %like% "^Predictor:[0-9]+$")
+    traj = rbindlist(lapply(psamp, function(s) {
+        data.table(eta = unname(s$latent[irows,]), theta = s$hyperpar[[isize]], id = seq_along(irows))
+    }), idcol = "sample")
+    traj[, row := which(model$valid)[id]]
+    traj[, set := model$set[row]]
+    traj[, y_obs := model$Y[id]]
+    traj[, dist := "nb"]
+    setcolorder(traj, c("sample", "id", "row", "set", "y_obs", "dist"))
+
+    # Sample predictions
+    cat("Sampling predictions...\n")
+    traj[, y_pred := rnbinom(1:.N, size = theta, mu = exp(eta))]
+
+    return (list(fit = fit, data = data[], traj = traj[]))
 }

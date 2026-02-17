@@ -122,14 +122,33 @@ term = function(term, name, ..., .env = parent.frame())
 }
 
 # Model parts
-make_model = function(formula, vehicle, data)
+make_model = function(formula, vehicle, train, test = NULL)
 {
     # Create generator
-    g = new_generator(vehicle, data, formula)
+    g = new_generator(vehicle, rbind(train, test), formula)
+    
+    # Keep track of train versus test data
+    g$set = factor(
+        c(rep("train", nrow(train)), rep("test", if (is.null(test)) 0 else nrow(test))), 
+        levels = c("train", "test", "unused")
+    )
+    setDT(g$data) ## TODO remove?
 
+    # Get outcome variable
+    # The rlang::duplicate is needed here due to a perversity of data.table.
+    y = rlang::duplicate(eval(formula[[2]], g$data, environment(formula)))
+    g$Y = y[!is.na(y)]
+    var_Y = new_var(g, "Y")
+    add_code(g, {
+        !!var_Y = rlang::duplicate(eval(quote(!!formula[[2]]), gen$data, environment(gen$formula)))[gen$valid]
+    })
+    formula[[2]] = var_Y
+    
     # Get valid data indices (non-NA)
-    g$valid = !is.na(eval(formula[[2]], g$data, environment(formula)))
+    g$valid = !is.na(y)
     stopifnot(length(g$valid) == nrow(g$data))
+    g$set[!g$valid] = "unused"
+    g$weights = case_match(g$set, "train" ~ 1, "test" ~ 0, "unused" ~ NA_real_)
 
     # Data and term substitutions
     # Operate on right side of formula y ~ x1 + x2 + ...
@@ -187,10 +206,10 @@ print.generic_model = function(x)
     cat("$env contents:", paste0(ls(x$env), collapse = ", "), "\n")
 }
 
-fit_model = function(model)
+fit_model = function(model, nsamp = 1000)
 {
     fit = match.fun(paste0("fit_model.", model$vehicle))
-    fit(model)
+    fit(model, nsamp)
 }
 
 # Spatial data helpers

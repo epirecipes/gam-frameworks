@@ -1,6 +1,7 @@
 library(mgcv)
 library(dlnm)
 library(gratia)
+library(mvtnorm)
 
 # Plot functions for mgcv vehicle.
 
@@ -190,9 +191,9 @@ DistributedLag.mgcv = function(g, x, group = NULL, lags = seq(0, 180, by = 30),
 
 
 
-fit_model.mgcv = function(model)
+fit_model.mgcv = function(model, nsamp)
 {
-    # This seems to be necessary as mgcv doesn't seem to look in the formula's
+    # Using 'with' seems necessary as mgcv doesn't seem to look in the formula's
     # environment. Consider:
     # formula <- y ~ x
     # environment(formula) <- new.env()
@@ -201,8 +202,59 @@ fit_model.mgcv = function(model)
     # glm(formula)
     # gam(formula)
     #
-    # The glm call works, but the gam call doesn't.
-    with(model$env,
-        gam(formula = formula, family = "nb", data = gen$data[gen$valid])
+    # In the above, the glm call works, but the gam call doesn't.
+    cat("Fitting...\n")
+    fit = with(model$env,
+        gam(formula = formula, family = "nb", data = gen$data[gen$valid], 
+            na.action = na.omit, weights = gen$weights[gen$valid])
     )
+
+    # Build data
+    data = model$data
+    data = cbind(data, Set = model$set)
+    
+    # Get prediction
+    cat("Response...\n")
+    pred = predict(fit, se.fit = TRUE)
+    stopifnot(is.null(fit[["na.action"]]) || class(fit[["na.action"]]) == "omit")
+    omit = as.integer(fit[["na.action"]])
+    
+    data[, Mean := NA_real_]
+    data[, Median := NA_real_]
+    data[, Lo95 := NA_real_]
+    data[, Hi95 := NA_real_]
+    ilink = fit$family$linkinv
+    
+    data[model$valid][["Mean"]][-omit] = ilink(pred$fit)
+    data[model$valid][["Median"]][-omit] = ilink(pred$fit)
+    data[model$valid][["Lo95"]][-omit] = ilink(pred$fit + qnorm(0.025) * pred$se.fit)
+    data[model$valid][["Hi95"]][-omit] = ilink(pred$fit + qnorm(0.975) * pred$se.fit)
+    
+    # Sample trajectories
+    cat("Sampling trajectories...\n")
+    # Posterior samples of coefficients
+    coef_samples = rmvnorm(nsamp, mean = coef(fit), sigma = vcov(fit))
+    # Design matrix for new data
+    Xp = predict(fit, type = "lpmatrix")
+    # Linear predictor samples
+    eta_samples = Xp %*% t(coef_samples) + fit$offset
+    nvalid = sum(model$valid)
+    traj = CJ(sample = seq_len(nsamp), id = seq_len(nvalid))
+    traj[, row := which(model$valid)[id]]
+    traj[, set := model$set[row]]
+    traj[, y_obs := model$Y[id]]
+    traj[, dist := "nb"]
+    
+    traj1 = CJ(sample = seq_len(nsamp), id = seq_len(nvalid))
+    traj1 = traj1[!id %in% omit]
+    traj1[, eta := c(eta_samples)]
+    
+    traj = merge(traj, traj1, by = c("sample", "id"), all.x = TRUE)
+    traj[, theta := fit$family$getTheta(TRUE)]
+    
+    # Sample predictions
+    cat("Sampling predictions...\n")
+    traj[!is.na(eta), y_pred := rnbinom(1:.N, size = theta, mu = exp(eta))]
+    
+    return (list(fit = fit, data = data[], traj = traj[]))
 }

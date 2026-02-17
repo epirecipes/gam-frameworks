@@ -88,10 +88,11 @@ data[, sum(is.na(spi3))]
 data[, sum(is.na(spi6))]
 data[, sum(is.na(spi12))]
 data[, sum(is.na(evi))]
-data[, sum(is.na(temp))]
+data[, sum(is.na(temp1))]
+data[, sum(is.na(temp2))]
 
 
 # take a look
 library(ggplot2)
 ggplot(data[adminCode == "NG020"]) +
-    geom_line(aes(x = date, y = temp, colour = "precip"))
+    geom_line(aes(x = date, y = temp1, colour = "temp1"))
